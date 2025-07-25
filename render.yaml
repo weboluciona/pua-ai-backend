@@ -1,6 +1,9 @@
 services:
   - type: web
-    name: rembg-api
-    runtime: python
+    name: fondo-rembg-api
+    env: python
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port 10000
+    repo: https://github.com/tuusuario/tu-repo
+    branch: main
