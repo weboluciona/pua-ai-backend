@@ -27,3 +27,10 @@ async def procesar_foto(file: UploadFile = File(...)):
 # 🧪 Para ejecutar localmente (opcional en Render)
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=10000)
+
+import os
+import uvicorn
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
