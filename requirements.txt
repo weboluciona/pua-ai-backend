@@ -1,5 +1,5 @@
-flask
-rembg
+fastapi==0.110.0
+uvicorn==0.29.0
+rembg==2.0.50
 onnxruntime
 pillow
-gunicorn
