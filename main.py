@@ -6,8 +6,8 @@ import uvicorn
 # 🚀 Inicializar FastAPI
 app = FastAPI()
 
-# 🔁 Crear sesión rembg (mantiene el modelo cargado en memoria)
-session = new_session()
+# 🔁 Crear sesión rembg con modelo liviano
+session = new_session(model_name="u2netp")
 
 @app.get("/")
 def home():
