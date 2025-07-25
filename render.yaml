@@ -1,2 +1,2 @@
 build:
-  requirements: requirements.txt
+  script: ./build.sh
