@@ -1,35 +1,29 @@
-from flask import Flask, request, send_file
-from rembg import remove
-from PIL import Image
-import io
-import time
+from fastapi import FastAPI, UploadFile, File
+from fastapi.responses import Response
+from rembg import remove, new_session
+import uvicorn
 
-app = Flask(__name__)
+# 🚀 Crear app FastAPI
+app = FastAPI()
 
-@app.route('/')
+# 🔁 Crear sesión de rembg 1 sola vez (esto ahorra RAM en Render)
+session = new_session()
+
+@app.get("/")
 def home():
-    return '🪙 Motor IA de Recorte de Púa funcionando'
+    return {"status": "🪙 Motor IA de Recorte de Púa activo"}
 
-@app.route('/procesar-foto', methods=['POST'])
-def procesar_foto():
-    if 'imagen' not in request.files:
-        return 'No se recibió imagen', 400
+@app.post("/procesar-foto")
+async def procesar_foto(file: UploadFile = File(...)):
+    # 📥 Leer la imagen enviada
+    input_bytes = await file.read()
 
-    file = request.files['imagen']
-    input_image = Image.open(file.stream).convert("RGBA")
-    output_image = remove(input_image)
+    # ✨ Eliminar fondo con sesión precargada
+    output_bytes = remove(input_bytes, session=session)
 
-    output_io = io.BytesIO()
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    nombre_archivo = f"pua_movil_{timestamp}.webp"
-    output_image.save(output_io, format="WEBP")
-    output_io.seek(0)
+    # 📦 Devolver imagen ya recortada (PNG por defecto)
+    return Response(content=output_bytes, media_type="image/png")
 
-    return send_file(output_io, mimetype='image/webp',
-                     as_attachment=True, download_name=nombre_archivo)
-
-import os
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))  # Render te asigna el puerto
-    app.run(host='0.0.0.0', port=port)
+# 🛠️ Para ejecutar localmente (no necesario en Render)
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=5000)
