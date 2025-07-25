@@ -1,0 +1,5 @@
+flask
+rembg
+onnxruntime
+pillow
+gunicorn
