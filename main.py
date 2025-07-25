@@ -24,10 +24,6 @@ async def procesar_foto(file: UploadFile = File(...)):
     # 📦 Devolver imagen como PNG
     return Response(content=output_bytes, media_type="image/png")
 
-# 🧪 Para ejecutar localmente (opcional en Render)
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=10000)
-
 import os
 import uvicorn
 
