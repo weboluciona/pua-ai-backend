@@ -1,40 +1,46 @@
-from fastapi import FastAPI, UploadFile, File, Response
+from fastapi import FastAPI, UploadFile, File
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
-from PIL import Image
-import io
+from rembg import remove, new_session
 
+# 🚀 Inicializar FastAPI
 app = FastAPI()
 
-# 🛡️ Configuración CORS
+# 🛡️ Añadir CORS para que tu HTML pueda hacer peticiones sin bloqueo
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Cambia esto por el dominio de tu app si lo prefieres
+    allow_origins=["*"],  # Puedes restringirlo a tu dominio si prefieres
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# 🔁 Crear sesión rembg con modelo liviano (ideal para Render Free)
+session = new_session(model_name="u2netp")
+
+# 🩺 Endpoint de salud para Render
+@app.get("/healthz")
+def health_check():
+    return {"status": "ok"}
+
+# 🏠 Endpoint base por si visitas la raíz en el navegador
+@app.get("/")
+def home():
+    return {"status": "✅ Servidor de recorte de fondo activo"}
+
+# 📸 Endpoint para procesar la imagen y quitar el fondo
 @app.post("/procesar-foto")
 async def procesar_foto(file: UploadFile = File(...)):
     try:
-        # 📥 Cargar la imagen recibida
-        contents = await file.read()
-        image = Image.open(io.BytesIO(contents))
+        # 📥 Leer imagen enviada
+        input_bytes = await file.read()
 
-        # 📐 Redimensionar si es necesario (por ejemplo, máximo 1024px de ancho)
-        max_width = 1024
-        if image.width > max_width:
-            ratio = max_width / image.width
-            new_height = int(image.height * ratio)
-            image = image.resize((max_width, new_height))
+        # ✂️ Quitar fondo con rembg usando sesión pre-cargada
+        output_bytes = remove(input_bytes, session=session)
 
-        # 🖼️ Comprimir a formato WEBP
-        buffer = io.BytesIO()
-        image.save(buffer, format="WEBP", quality=70)
-        buffer.seek(0)
-
-        # 📤 Devolver la imagen procesada
-        return Response(content=buffer.read(), media_type="image/webp")
+        # 📤 Devolver imagen como PNG
+        return Response(content=output_bytes, media_type="image/png")
 
     except Exception as e:
-        return {"error": str(e)}
+        # ❌ Manejo de errores para evitar fallos silenciosos
+        return Response(content=str(e), media_type="text/plain", status_code=500)
