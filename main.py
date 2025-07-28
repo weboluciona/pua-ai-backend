@@ -1,31 +1,40 @@
-from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import Response
-from rembg import remove, new_session
+from fastapi import FastAPI, UploadFile, File, Response
+from fastapi.middleware.cors import CORSMiddleware
+from PIL import Image
+import io
 
-# 🚀 Inicializar FastAPI
 app = FastAPI()
 
-# 🔁 Crear sesión rembg con modelo liviano
-session = new_session(model_name="u2netp")
+# 🛡️ Configuración CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Cambia esto por el dominio de tu app si lo prefieres
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# 📍 Endpoint base
-@app.get("/")
-def home():
-    return {"status": "✅ Servidor de recorte de fondo activo"}
-
-# ❤️ Endpoint de salud (para Render)
-@app.get("/healthz")
-def health_check():
-    return {"status": "ok"}
-
-# 📸 Endpoint principal para recortar imagen
 @app.post("/procesar-foto")
 async def procesar_foto(file: UploadFile = File(...)):
-    # 📥 Leer imagen enviada desde el frontend (formData → "file")
-    input_bytes = await file.read()
+    try:
+        # 📥 Cargar la imagen recibida
+        contents = await file.read()
+        image = Image.open(io.BytesIO(contents))
 
-    # ✂️ Recortar fondo con rembg (usando sesión pre-cargada)
-    output_bytes = remove(input_bytes, session=session)
+        # 📐 Redimensionar si es necesario (por ejemplo, máximo 1024px de ancho)
+        max_width = 1024
+        if image.width > max_width:
+            ratio = max_width / image.width
+            new_height = int(image.height * ratio)
+            image = image.resize((max_width, new_height))
 
-    # 📦 Devolver imagen como PNG
-    return Response(content=output_bytes, media_type="image/png")
+        # 🖼️ Comprimir a formato WEBP
+        buffer = io.BytesIO()
+        image.save(buffer, format="WEBP", quality=70)
+        buffer.seek(0)
+
+        # 📤 Devolver la imagen procesada
+        return Response(content=buffer.read(), media_type="image/webp")
+
+    except Exception as e:
+        return {"error": str(e)}
