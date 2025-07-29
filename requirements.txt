@@ -1,5 +1,6 @@
 fastapi
 python-multipart
 uvicorn
-rembg
-onnxruntime
+Pillow
+numpy
+opencv-python-headless
