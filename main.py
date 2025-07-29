@@ -1,9 +1,12 @@
 from fastapi import FastAPI, UploadFile, File, Response
 from fastapi.middleware.cors import CORSMiddleware
-from PIL import Image # Todavía útil para abrir/guardar y trabajar con IO
+from PIL import Image
 import io
 import numpy as np
-import cv2 # ¡Importamos OpenCV!
+import cv2
+import os # ¡Importamos para acceder a variables de entorno!
+import pymysql # ¡Importamos PyMySQL!
+import pymysql.cursors # Para usar DictCursor
 
 # 🚀 Inicializar FastAPI
 app = FastAPI()
@@ -17,37 +20,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 🎨 PARAMETROS CLAVE PARA AJUSTAR LA ELIMINACIÓN DEL FONDO (¡LEE Y AJUSTA!)
-# Para tu fondo rosa, es mejor trabajar en el espacio de color HSV.
-# Hue (Tono), Saturation (Saturación), Value (Brillo).
-# Los valores H van de 0-179 en OpenCV (no 0-360 como en otros sistemas).
-# Los valores S y V van de 0-255.
+# --- CONFIGURACIÓN DE LA BASE DE DATOS ---
+DB_HOST = os.getenv("DB_HOST", "localhost") # Usará localhost si no se define la variable de entorno
+DB_USER = os.getenv("DB_USER", "root")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+DB_NAME = os.getenv("DB_NAME", "hosting163236eu_puas_chroma") # Asegúrate de que este sea el nombre correcto de tu DB
+DB_PORT = int(os.getenv("DB_PORT", 3306)) # El puerto por defecto para MySQL es 3306
 
-# **AJUSTA ESTOS LÍMITES PARA EL ROSA/MAGENTA DE TU FONDO**
-# Puedes usar una herramienta de selección de color para tu imagen (ej. en un editor de fotos)
-# y luego convertir RGB a HSV (hay conversores online).
-# Ejemplo para un rosa/magenta vibrante:
-# R=255, G=0, B=255 (magenta puro) -> H=150, S=255, V=255 (aproximado en OpenCV)
-# Hemos de dar un rango. Si el rosa tiene algo de rojo, su H será menor.
-# Si es más tirando a morado, su H será mayor.
-# Esto es un punto de partida para tu imagen:
+def get_db_connection():
+    try:
+        conn = pymysql.connect(
+            host=DB_HOST,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME,
+            port=DB_PORT,
+            cursorclass=pymysql.cursors.DictCursor # Para que los resultados sean diccionarios
+        )
+        return conn
+    except pymysql.Error as e:
+        print(f"Error al conectar a la base de datos: {e}")
+        # En un entorno de producción, podrías querer registrar esto o devolver un error más amigable
+        raise # Vuelve a lanzar la excepción para que FastAPI la maneje
+
+
+# --- FIN CONFIGURACIÓN DE LA BASE DE DATOS ---
+
+
+# 🎨 PARAMETROS CLAVE PARA AJUSTAR LA ELIMINACIÓN DEL FONDO (¡LEE Y AJUSTA!)
+# Estos parámetros están hardcodeados por ahora, los haremos dinámicos en el siguiente paso
 LOWER_HSV_BOUND = np.array([140, 50, 50]) # Tono bajo, Saturación baja, Brillo bajo
 UPPER_HSV_BOUND = np.array([170, 255, 255]) # Tono alto, Saturación alta, Brillo alto
 
-# **PARÁMETROS PARA EL RECORTE Y DIFUMINADO (FEATHERING)**
-FEATHER_BLUR_KERNEL = (15, 15) # Tamaño del kernel para el desenfoque del borde (feathering).
-                               # Números impares y más grandes = más difuminado. (ej: (5,5), (25,25))
-ALPHA_THRESHOLD_FG = 180     # Umbral de la máscara para el primer plano (foreground).
-                               # Píxeles con valor alfa >= a este se considerarán opacos.
-                               # Ajusta para hacer el corte más nítido o más suave. (0-255)
-ALPHA_THRESHOLD_BG = 50      # Umbral de la máscara para el fondo (background).
-                               # Píxeles con valor alfa <= a este se considerarán transparentes.
-                               # Ajusta para afinar la eliminación de restos de fondo. (0-255)
-
-# **PARÁMETROS PARA LIMPIAR LA MÁSCARA (opcional, para ruido o huecos)**
-MORPH_KERNEL_SIZE = 5         # Tamaño del kernel para operaciones morfológicas (ej: 3, 5, 7)
-                               # Más grande = más efecto.
-ITERATIONS = 2                # Número de iteraciones para operaciones morfológicas.
+FEATHER_BLUR_KERNEL = (15, 15)
+ALPHA_THRESHOLD_FG = 180
+ALPHA_THRESHOLD_BG = 50
+MORPH_KERNEL_SIZE = 5
+ITERATIONS = 2
 
 
 # 🩺 Endpoint de salud para Render
