@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Response, HTTPException, status
+from fastapi import FastAPI, UploadFile, File, Response, HTTPException, status, Form
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 import io
@@ -84,17 +84,20 @@ class ChromaProfile(ChromaProfileBase):
 
 # --- FIN MODELOS DE DATOS ---
 
+# 🎨 PARAMETROS CLAVE PARA AJUSTAR LA ELIMINACIÓN DEL FONDO (Valores por defecto si no se proporcionan)
+# Estos valores ahora serán los valores por defecto si los campos del perfil en la DB son NULL o no se envían.
+DEFAULT_LOWER_HSV_H = 140
+DEFAULT_LOWER_HSV_S = 50
+DEFAULT_LOWER_HSV_V = 50
+DEFAULT_UPPER_HSV_H = 170
+DEFAULT_UPPER_HSV_S = 255
+DEFAULT_UPPER_HSV_V = 255
 
-# 🎨 PARAMETROS CLAVE PARA AJUSTAR LA ELIMINACIÓN DEL FONDO (Estos están hardcodeados POR AHORA)
-# En el siguiente paso, estos valores se cargarán dinámicamente desde la base de datos.
-LOWER_HSV_BOUND = np.array([140, 50, 50])
-UPPER_HSV_BOUND = np.array([170, 255, 255])
-
-FEATHER_BLUR_KERNEL = (15, 15) # Asegúrate de que los valores sean impares y positivos
-ALPHA_THRESHOLD_FG = 180
-ALPHA_THRESHOLD_BG = 50
-MORPH_KERNEL_SIZE = 5 # Asegúrate de que el valor sea impar y positivo
-ITERATIONS = 2
+DEFAULT_FEATHER_BLUR_KERNEL_SIZE = 15 # Asegúrate de que los valores sean impares
+DEFAULT_ALPHA_THRESHOLD_FG = 180
+DEFAULT_ALPHA_THRESHOLD_BG = 50
+DEFAULT_MORPH_KERNEL_SIZE = 5 # Asegúrate de que el valor sea impar
+DEFAULT_MORPH_ITERATIONS = 2
 
 
 # 🩺 Endpoint de salud para Render
@@ -217,9 +220,9 @@ async def update_profile(profile_id: int, profile: ChromaProfileBase):
 
                 # 2. Comprobar si el nuevo profile_name ya existe para otro ID (evitar duplicados)
                 if profile.profile_name: # Solo si se proporciona un profile_name en la actualización
-                     cursor.execute("SELECT id FROM chroma_settings_profiles WHERE profile_name = %s AND id != %s", (profile.profile_name, profile_id))
-                     if cursor.fetchone():
-                         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Profile with this name already exists for another ID")
+                    cursor.execute("SELECT id FROM chroma_settings_profiles WHERE profile_name = %s AND id != %s", (profile.profile_name, profile_id))
+                    if cursor.fetchone():
+                        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Profile with this name already exists for another ID")
 
                 query = """
                 UPDATE chroma_settings_profiles SET
@@ -277,43 +280,103 @@ async def delete_profile(profile_id: int):
         print(f"ERROR: Error desconocido al eliminar perfil: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
+---
+### **Endpoint de Procesamiento de Imagen Actualizado**
+---
 # 📸 Endpoint para procesar la imagen y quitar el fondo
-# ESTE ENDPOINT AÚN USA LOS PARÁMETROS HARDCODEADOS.
-# Lo modificaremos en el Paso 3 para que use los parámetros de la DB.
+# ESTE ENDPOINT AHORA USA LOS PARÁMETROS ENVIADOS DESDE EL FRONETEND.
 @app.post("/procesar-foto", summary="Process image and remove background")
-async def procesar_foto(file: UploadFile = File(...)):
+async def procesar_foto(
+    file: UploadFile = File(...),
+    # Aquí es donde recibimos los parámetros del formulario como campos individuales
+    # Usamos `Form(...)` para indicar que son campos de un formulario (FormData)
+    # y los tipos Python con `| None` para permitir que sean opcionales/nulos.
+    lower_hsv_h: int | None = Form(DEFAULT_LOWER_HSV_H),
+    lower_hsv_s: int | None = Form(DEFAULT_LOWER_HSV_S),
+    lower_hsv_v: int | None = Form(DEFAULT_LOWER_HSV_V),
+    upper_hsv_h: int | None = Form(DEFAULT_UPPER_HSV_H),
+    upper_hsv_s: int | None = Form(DEFAULT_UPPER_HSV_S),
+    upper_hsv_v: int | None = Form(DEFAULT_UPPER_HSV_V),
+    feather_blur_kernel_size: int | None = Form(DEFAULT_FEATHER_BLUR_KERNEL_SIZE),
+    alpha_threshold_fg: int | None = Form(DEFAULT_ALPHA_THRESHOLD_FG),
+    alpha_threshold_bg: int | None = Form(DEFAULT_ALPHA_THRESHOLD_BG),
+    morph_kernel_size: int | None = Form(DEFAULT_MORPH_KERNEL_SIZE),
+    morph_iterations: int | None = Form(DEFAULT_MORPH_ITERATIONS)
+):
     """
-    Recibe una imagen, aplica el algoritmo de chroma key con los parámetros predefinidos,
-    y devuelve la imagen con el fondo eliminado (PNG con transparencia).
+    Recibe una imagen y parámetros de configuración para chroma key,
+    aplica el algoritmo y devuelve la imagen con el fondo eliminado (PNG con transparencia).
+    Los parámetros ahora se reciben desde el frontend.
     """
     try:
         input_bytes = await file.read()
         pil_image = Image.open(io.BytesIO(input_bytes)).convert("RGB")
         opencv_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
+        # Validaciones de kernel_size para asegurar que sean impares y positivos
+        if feather_blur_kernel_size is not None and (feather_blur_kernel_size % 2 == 0 or feather_blur_kernel_size <= 0):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="feather_blur_kernel_size must be an odd, positive integer.")
+        if morph_kernel_size is not None and (morph_kernel_size % 2 == 0 or morph_kernel_size <= 0):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="morph_kernel_size must be an odd, positive integer.")
+
+        # --- APLICACIÓN DEL ALGORITMO CHROMA KEY CON PARÁMETROS DINÁMICOS ---
+        # 1. Definir los límites HSV
+        # Aseguramos que los valores sean `int` y no `None` usando `or` con los valores por defecto
+        lower_hsv = np.array([
+            lower_hsv_h if lower_hsv_h is not None else DEFAULT_LOWER_HSV_H,
+            lower_hsv_s if lower_hsv_s is not None else DEFAULT_LOWER_HSV_S,
+            lower_hsv_v if lower_hsv_v is not None else DEFAULT_LOWER_HSV_V
+        ])
+        upper_hsv = np.array([
+            upper_hsv_h if upper_hsv_h is not None else DEFAULT_UPPER_HSV_H,
+            upper_hsv_s if upper_hsv_s is not None else DEFAULT_UPPER_HSV_S,
+            upper_hsv_v if upper_hsv_v is not None else DEFAULT_UPPER_HSV_V
+        ])
+
         hsv_image = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv_image, LOWER_HSV_BOUND, UPPER_HSV_BOUND)
+        mask = cv2.inRange(hsv_image, lower_hsv, upper_hsv)
         mask_inverted = cv2.bitwise_not(mask)
 
-        kernel_morph = np.ones((MORPH_KERNEL_SIZE, MORPH_KERNEL_SIZE), np.uint8)
-        mask_inverted = cv2.morphologyEx(mask_inverted, cv2.MORPH_OPEN, kernel_morph, iterations=ITERATIONS)
-        mask_inverted = cv2.morphologyEx(mask_inverted, cv2.MORPH_CLOSE, kernel_morph, iterations=ITERATIONS)
+        # 2. Operaciones morfológicas
+        # Usamos el tamaño de kernel dinámico o el por defecto
+        current_morph_kernel_size = morph_kernel_size if morph_kernel_size is not None else DEFAULT_MORPH_KERNEL_SIZE
+        kernel_morph = np.ones((current_morph_kernel_size, current_morph_kernel_size), np.uint8)
+        
+        current_morph_iterations = morph_iterations if morph_iterations is not None else DEFAULT_MORPH_ITERATIONS
+        
+        mask_inverted = cv2.morphologyEx(mask_inverted, cv2.MORPH_OPEN, kernel_morph, iterations=current_morph_iterations)
+        mask_inverted = cv2.morphologyEx(mask_inverted, cv2.MORPH_CLOSE, kernel_morph, iterations=current_morph_iterations)
 
-        # Aquí FEATHER_BLUR_KERNEL se asegura de que el tuple sea de enteros impares para cv2.GaussianBlur
-        # Si FEATHER_BLUR_KERNEL es (15, 15), es un buen valor inicial.
-        blurred_mask = cv2.GaussianBlur(mask_inverted, FEATHER_BLUR_KERNEL, 0)
-        alpha_channel = np.interp(blurred_mask, [ALPHA_THRESHOLD_BG, ALPHA_THRESHOLD_FG], [0, 255]).astype(np.uint8)
+        # 3. Desenfoque y canal alfa
+        # Usamos el tamaño de kernel de desenfoque dinámico o el por defecto
+        current_feather_blur_kernel_size = feather_blur_kernel_size if feather_blur_kernel_size is not None else DEFAULT_FEATHER_BLUR_KERNEL_SIZE
+        # cv2.GaussianBlur necesita un tuple (size, size) con valores impares.
+        feather_blur_kernel_tuple = (current_feather_blur_kernel_size, current_feather_blur_kernel_size)
 
+        blurred_mask = cv2.GaussianBlur(mask_inverted, feather_blur_kernel_tuple, 0)
+        
+        # Usamos los umbrales alfa dinámicos o los por defecto
+        current_alpha_threshold_bg = alpha_threshold_bg if alpha_threshold_bg is not None else DEFAULT_ALPHA_THRESHOLD_BG
+        current_alpha_threshold_fg = alpha_threshold_fg if alpha_threshold_fg is not None else DEFAULT_ALPHA_THRESHOLD_FG
+
+        alpha_channel = np.interp(blurred_mask, 
+                                  [current_alpha_threshold_bg, current_alpha_threshold_fg], 
+                                  [0, 255]).astype(np.uint8)
+
+        # 4. Combinar con la imagen original
         b, g, r = cv2.split(opencv_image)
         rgba_image = cv2.merge([b, g, r, alpha_channel])
 
+        # 5. Convertir a PIL Image y devolver
         output_pil_image = Image.fromarray(cv2.cvtColor(rgba_image, cv2.COLOR_BGR2RGBA))
         output_buffer = io.BytesIO()
-        output_pil_image.save(output_buffer, format="PNG")
+        output_pil_image.save(output_buffer, format="PNG") # Se recomienda PNG para transparencia
         output_bytes = output_buffer.getvalue()
 
         return Response(content=output_bytes, media_type="image/png")
 
+    except HTTPException: # Re-lanza HTTPExceptions ya definidas (ej. 400 Bad Request)
+        raise
     except Exception as e:
         print(f"ERROR: Fallo al procesar la foto (chroma key OpenCV): {e}")
         # En un entorno de producción, evita exponer detalles internos del error.
