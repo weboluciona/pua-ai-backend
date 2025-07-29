@@ -280,11 +280,7 @@ async def delete_profile(profile_id: int):
         print(f"ERROR: Error desconocido al eliminar perfil: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
----
-### **Endpoint de Procesamiento de Imagen Actualizado**
----
 # 📸 Endpoint para procesar la imagen y quitar el fondo
-# ESTE ENDPOINT AHORA USA LOS PARÁMETROS ENVIADOS DESDE EL FRONETEND.
 @app.post("/procesar-foto", summary="Process image and remove background")
 async def procesar_foto(
     file: UploadFile = File(...),
