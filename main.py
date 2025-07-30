@@ -158,7 +158,7 @@ async def procesar_foto(
         print(f"ERROR: Fallo al procesar la foto (chroma key OpenCV): {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error processing image: {e}")
 
-# --- NUEVA RUTA: Procesamiento por Lotes ---
+# --- Endpoint de Procesamiento por Lotes ---
 @app.post("/batch-process", summary="Process A4 image with multiple picks and return a ZIP of cropped WebP images")
 async def batch_process(
     file: UploadFile = File(...),
@@ -177,8 +177,8 @@ async def batch_process(
 ):
     """
     Recibe una imagen A4 con múltiples púas en un fondo chroma,
-    elimina el fondo, detecta cada púa, la rota para que quede vertical
-    y devuelve un archivo ZIP con cada púa recortada como un archivo WebP individual.
+    elimina el fondo, detecta cada púa, y devuelve un archivo ZIP con cada púa
+    recortada como un archivo WebP individual, manteniendo su orientación original.
     """
     try:
         # Leer la imagen A4
@@ -190,7 +190,6 @@ async def batch_process(
             raise HTTPException(status_code=400, detail="No se pudo decodificar la imagen A4.")
 
         # 1. Aplicar Chroma Key a toda la imagen A4
-        # Ahora _apply_chroma_key_logic devuelve la imagen RGBA y la máscara binaria
         processed_a4_img_rgba, binary_mask_for_contours = _apply_chroma_key_logic(
             img_a4,
             lower_hsv_h, lower_hsv_s, lower_hsv_v,
@@ -203,87 +202,34 @@ async def batch_process(
         # 2. Detección de Contornos (para identificar cada púa)
         contours, _ = cv2.findContours(binary_mask_for_contours, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # --- AÑADIR ESTOS PRINTS TEMPORALES PARA DEPURACIÓN ---
         print("\n--- INICIO DE DEBUG: Áreas de Contornos Detectados ---")
         if not contours:
             print("No se detectaron contornos en la imagen A4. Intenta ajustar los parámetros HSV o los parámetros morfológicos.")
-        # --- FIN DE PRINTS TEMPORALES ---
-
+        
         output_images = []
         MIN_PUA_AREA = 12000  # Área mínima para considerar un contorno como una púa
         MAX_PUA_AREA = 30000  # Área máxima para evitar detectar la hoja completa
 
         for i, contour in enumerate(contours):
             area = cv2.contourArea(contour)
-            print(f"Contorno {i+1}: Área = {int(area)} píxeles cuadrados") # Debugging
+            print(f"Contorno {i+1}: Área = {int(area)} píxeles cuadrados")
             
             if MIN_PUA_AREA < area < MAX_PUA_AREA: 
-                # Obtener el rectángulo de área mínima y su ángulo
-                rect = cv2.minAreaRect(contour)
-                (center_x, center_y), (width, height), angle = rect
+                # *** Se ha eliminado la lógica de rotación aquí ***
+                # Ahora solo se usa el boundingRect para el recorte, manteniendo la orientación original
 
-                # --- Lógica de Rotación Revisada para Verticalidad (CAMBIADO AQUÍ) ---
-                # Queremos que el lado más largo sea la "altura" y esté alineado verticalmente.
-                # OpenCV retorna el ángulo en [-90, 0).
-                # Si 'width' es mayor que 'height', el lado largo es 'width' y el ángulo es relativo al eje X.
-                # Si 'height' es mayor que 'width', el lado largo es 'height' y el ángulo es relativo al eje Y.
-
-                # Normalizamos el 'width' y 'height' para que 'width' siempre sea el lado menor y 'height' el mayor.
-                # Si el ancho actual es mayor que el alto actual, intercambiamos y ajustamos el ángulo.
-                if width < height:
-                    # El rectángulo ya está orientado como 'alto', el ángulo es la desviación de la vertical.
-                    rotation_angle = angle
-                else:
-                    # El rectángulo está orientado como 'ancho', el ángulo es la desviación de la horizontal.
-                    # Lo giramos 90 grados para que el lado más largo (originalmente 'width') se convierta en 'height'.
-                    width, height = height, width  # Intercambiar dimensiones para la lógica
-                    rotation_angle = angle + 90   # Ajustar el ángulo de rotación
-
-                # Para asegurar que el ángulo de rotación siempre esté en el rango [-45, 45) o [0, 90).
-                # Esto es crucial para minAreaRect. Si el ángulo resultante es mayor de 45 o menor de -45,
-                # significa que la otra orientación (rotar 90 grados y usar el complemento) sería la correcta
-                # para la verticalidad.
-                if rotation_angle > 45: # Por ejemplo, si da 80 (casi -90), queremos que sea -10
-                    rotation_angle -= 90
-                elif rotation_angle < -45: # Por ejemplo, si da -80 (casi -90), queremos que sea 10
-                    rotation_angle += 90
-
-
-                # Crear la matriz de rotación
-                M = cv2.getRotationMatrix2D((center_x, center_y), rotation_angle, 1.0)
-                
-                # Calcular las nuevas dimensiones de la imagen después de rotar para evitar recortes
-                cos = np.abs(M[0, 0])
-                sin = np.abs(M[0, 1])
-                new_width = int((processed_a4_img_rgba.shape[1] * cos) + (processed_a4_img_rgba.shape[0] * sin))
-                new_height = int((processed_a4_img_rgba.shape[1] * sin) + (processed_a4_img_rgba.shape[0] * cos))
-
-                # Ajustar la matriz de rotación para trasladar la imagen al nuevo centro
-                M[0, 2] += (new_width / 2) - center_x
-                M[1, 2] += (new_height / 2) - center_y
-
-                # Rotar la imagen RGBA completa
-                rotated_image_full = cv2.warpAffine(processed_a4_img_rgba, M, (new_width, new_height), 
-                                                    flags=cv2.INTER_LANCZOS4, 
-                                                    borderMode=cv2.BORDER_CONSTANT, 
-                                                    borderValue=(0, 0, 0, 0)) # Fondo transparente
-
-                # Transformar el contorno original con la misma matriz de rotación
-                # Esto nos da la nueva posición del contorno en la imagen rotada
-                transformed_contour = cv2.transform(contour.reshape(-1, 1, 2), M).reshape(-1, 1, 2)
-                
-                # Obtener el nuevo rectángulo delimitador (axial) de la púa en la imagen rotada
-                x_rot, y_rot, w_rot, h_rot = cv2.boundingRect(transformed_contour)
+                # Obtener el rectángulo delimitador (axial) de la púa en la imagen original
+                x, y, w, h = cv2.boundingRect(contour)
 
                 # Añadir un pequeño padding al recorte final
                 padding = 10 
-                x_final = max(0, x_rot - padding)
-                y_final = max(0, y_rot - padding)
-                w_final = min(rotated_image_full.shape[1] - x_final, w_rot + 2 * padding)
-                h_final = min(rotated_image_full.shape[0] - y_final, h_rot + 2 * padding)
+                x_final = max(0, x - padding)
+                y_final = max(0, y - padding)
+                w_final = min(processed_a4_img_rgba.shape[1] - x_final, w + 2 * padding)
+                h_final = min(processed_a4_img_rgba.shape[0] - y_final, h + 2 * padding)
                 
-                # Recortar la púa de la imagen rotada completa
-                pua_cropped_rgba = rotated_image_full[y_final : y_final + h_final, x_final : x_final + w_final]
+                # Recortar la púa directamente de la imagen RGBA procesada
+                pua_cropped_rgba = processed_a4_img_rgba[y_final : y_final + h_final, x_final : x_final + w_final]
 
                 if pua_cropped_rgba.size == 0:
                     print(f"Advertencia: Recorte vacío para contorno {i+1}. Saltando.")
@@ -293,7 +239,7 @@ async def batch_process(
                 is_success, buffer = cv2.imencode(".webp", pua_cropped_rgba)
                 if is_success:
                     output_images.append({
-                        "filename": f"{file_prefix}_{i+1}.webp", # Usamos el prefijo aquí
+                        "filename": f"{file_prefix}_{i+1}.webp",
                         "data": io.BytesIO(buffer.tobytes())
                     })
         
@@ -316,7 +262,7 @@ async def batch_process(
             headers={"Content-Disposition": f"attachment; filename={zip_filename}"}
         )
 
-    except HTTPException: # Re-lanza HTTPExceptions ya definidas
+    except HTTPException:
         raise
     except Exception as e:
         print(f"ERROR en batch-process: {e}")
