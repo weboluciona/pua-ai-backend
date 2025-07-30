@@ -232,8 +232,9 @@ async def batch_process(
         # --- AJUSTA ESTOS VALORES SEGÚN EL TAMAÑO DE TUS PÚAS EN LA IMAGEN A4 ---
         # Si tus púas son pequeñas en una A4 grande, reduce min_pua_area.
         # Si detecta todo el A4, reduce max_pua_area.
-        MIN_PUA_AREA = 1000  # Área mínima para considerar un contorno como una púa (AJUSTA AQUÍ)
-        MAX_PUA_AREA = 400000 # Área máxima para evitar detectar la hoja completa (AJUSTA AQUÍ)
+        MIN_PUA_AREA = 12000  # Área mínima para considerar un contorno como una púa (VALOR AJUSTADO)
+        MAX_PUA_AREA = 30000  # Área máxima para evitar detectar la hoja completa (VALOR AJUSTADO)
+
 
         for i, contour in enumerate(contours):
             area = cv2.contourArea(contour)
