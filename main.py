@@ -222,23 +222,33 @@ async def batch_process(
                 rect = cv2.minAreaRect(contour)
                 (center_x, center_y), (width, height), angle = rect
 
-                # --- Lógica de Rotación para Verticalidad ---
-                # Ajustar el ángulo para que el lado más largo sea la "altura"
-                if width < height: # Si el 'height' es el lado más largo
-                    # El ángulo ya está referenciado al eje Y (vertical)
-                    # minAreaRect da ángulos en [-90, 0) para rectángulos más altos que anchos.
-                    # Queremos que la púa quede con 0 grados (vertical)
+                # --- Lógica de Rotación Revisada para Verticalidad (CAMBIADO AQUÍ) ---
+                # Queremos que el lado más largo sea la "altura" y esté alineado verticalmente.
+                # OpenCV retorna el ángulo en [-90, 0).
+                # Si 'width' es mayor que 'height', el lado largo es 'width' y el ángulo es relativo al eje X.
+                # Si 'height' es mayor que 'width', el lado largo es 'height' y el ángulo es relativo al eje Y.
+
+                # Normalizamos el 'width' y 'height' para que 'width' siempre sea el lado menor y 'height' el mayor.
+                # Si el ancho actual es mayor que el alto actual, intercambiamos y ajustamos el ángulo.
+                if width < height:
+                    # El rectángulo ya está orientado como 'alto', el ángulo es la desviación de la vertical.
                     rotation_angle = angle
-                else: # Si el 'width' es el lado más largo (rectángulo "acostado")
-                    # El ángulo está referenciado al eje X (horizontal)
-                    # Sumamos 90 para referenciarlo al eje Y (vertical)
-                    rotation_angle = angle + 90
-                
-                # Para asegurar que la púa no quede "boca abajo"
-                # Esto es una heurística y puede requerir ajuste fino si las púas tienen una orientación preferida
-                # (ej. la punta siempre hacia abajo).
-                # Por ahora, simplemente rota para que el lado más largo sea vertical.
-                
+                else:
+                    # El rectángulo está orientado como 'ancho', el ángulo es la desviación de la horizontal.
+                    # Lo giramos 90 grados para que el lado más largo (originalmente 'width') se convierta en 'height'.
+                    width, height = height, width  # Intercambiar dimensiones para la lógica
+                    rotation_angle = angle + 90   # Ajustar el ángulo de rotación
+
+                # Para asegurar que el ángulo de rotación siempre esté en el rango [-45, 45) o [0, 90).
+                # Esto es crucial para minAreaRect. Si el ángulo resultante es mayor de 45 o menor de -45,
+                # significa que la otra orientación (rotar 90 grados y usar el complemento) sería la correcta
+                # para la verticalidad.
+                if rotation_angle > 45: # Por ejemplo, si da 80 (casi -90), queremos que sea -10
+                    rotation_angle -= 90
+                elif rotation_angle < -45: # Por ejemplo, si da -80 (casi -90), queremos que sea 10
+                    rotation_angle += 90
+
+
                 # Crear la matriz de rotación
                 M = cv2.getRotationMatrix2D((center_x, center_y), rotation_angle, 1.0)
                 
