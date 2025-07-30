@@ -32,7 +32,7 @@ DEFAULT_ALPHA_THRESHOLD_BG = 50
 DEFAULT_MORPH_KERNEL_SIZE = 5 # Asegúrate de que el valor sea impar
 DEFAULT_MORPH_ITERATIONS = 2
 
-# 🩺 Endpoint de salud para Render
+# 📸 Endpoint de salud para Render
 @app.get("/healthz", summary="Health Check")
 def health_check():
     """
@@ -52,7 +52,6 @@ def home():
 @app.post("/procesar-foto", summary="Process image and remove background with provided parameters")
 async def procesar_foto(
     file: UploadFile = File(...),
-    # Ahora recibimos todos los parámetros directamente del formulario (enviados por PHP)
     lower_hsv_h: int | None = Form(DEFAULT_LOWER_HSV_H),
     lower_hsv_s: int | None = Form(DEFAULT_LOWER_HSV_S),
     lower_hsv_v: int | None = Form(DEFAULT_LOWER_HSV_V),
@@ -67,7 +66,7 @@ async def procesar_foto(
 ):
     """
     Recibe una imagen y TODOS los parámetros de configuración para chroma key desde el frontend/PHP,
-    aplica el algoritmo y devuelve la imagen con el fondo eliminado (WebP con transparencia).
+    aplica el algoritmo, redimensiona a un máximo de 350px de ancho y devuelve la imagen con el fondo eliminado (WebP con transparencia).
     """
     try:
         input_bytes = await file.read()
@@ -81,7 +80,6 @@ async def procesar_foto(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="morph_kernel_size must be an odd, positive integer.")
 
         # --- APLICACIÓN DEL ALGORITMO CHROMA KEY CON PARÁMETROS DINÁMICOS ---
-        # Los parámetros ya vienen del formulario, no de la DB aquí.
         
         # 1. Definir los límites HSV
         lower_hsv = np.array([
@@ -127,19 +125,27 @@ async def procesar_foto(
         # 5. Convertir a PIL Image
         output_pil_image = Image.fromarray(cv2.cvtColor(rgba_image, cv2.COLOR_BGR2RGBA))
         
-        # --- CAMBIO CLAVE AQUÍ: Guardar en buffer como WebP ---
-        output_buffer = io.BytesIO()
-        # Calidad de WebP: 0-100 (80 es un buen equilibrio)
-        # `method` (0-6) controla la velocidad/calidad de compresión (6 es la más lenta/mejor)
-        output_pil_image.save(output_buffer, format="WEBP", quality=80, method=6) 
-        output_buffer.seek(0) # Mueve el puntero al inicio del buffer
+        # --- NUEVO CÓDIGO: Redimensionar la imagen si su ancho es mayor a 350px ---
+        MAX_WIDTH_OUTPUT = 350
+        if output_pil_image.width > MAX_WIDTH_OUTPUT:
+            # Calcula la nueva altura manteniendo la proporción
+            aspect_ratio = output_pil_image.height / output_pil_image.width
+            new_height = int(MAX_WIDTH_OUTPUT * aspect_ratio)
+            # Redimensiona la imagen
+            # Image.LANCZOS es un filtro de alta calidad para el downsampling
+            output_pil_image = output_pil_image.resize((MAX_WIDTH_OUTPUT, new_height), Image.LANCZOS)
+        # --- FIN DEL NUEVO CÓDIGO ---
 
-        # --- CAMBIO CLAVE AQUÍ: Devolver la respuesta con el tipo MIME correcto ---
+        # 6. Guardar en buffer como WebP
+        output_buffer = io.BytesIO()
+        output_pil_image.save(output_buffer, format="WEBP", quality=80, method=6) 
+        output_buffer.seek(0) 
+
+        # 7. Devolver la respuesta con el tipo MIME correcto
         return Response(content=output_buffer.getvalue(), media_type="image/webp")
 
     except HTTPException: # Re-lanza HTTPExceptions ya definidas (ej. 400 Bad Request)
         raise
     except Exception as e:
         print(f"ERROR: Fallo al procesar la foto (chroma key OpenCV): {e}")
-        # En un entorno de producción, evita exponer detalles internos del error.
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error processing image")
