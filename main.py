@@ -5,9 +5,6 @@ import io
 import numpy as np
 import cv2
 import os
-# import pymysql # ¡YA NO NECESITAMOS PYMYSQL!
-# import pymysql.cursors # ¡YA NO NECESITAMOS PYMYSQL!
-# from pydantic import BaseModel, Field # Estos modelos CRUD ya no son necesarios en Render
 
 # 🚀 Inicializar FastAPI
 app = FastAPI()
@@ -21,12 +18,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- ¡SE HA ELIMINADO LA CONFIGURACIÓN DE LA BASE DE DATOS! ---
-# No es necesaria si Render no se conecta a la DB.
-
-
 # 🎨 PARAMETROS CLAVE PARA AJUSTAR LA ELIMINACIÓN DEL FONDO (Valores por defecto si no se proporcionan)
-# Estos valores se usarán si los campos del perfil en la DB son NULL o no se envían desde el frontend PHP.
 DEFAULT_LOWER_HSV_H = 140
 DEFAULT_LOWER_HSV_S = 50
 DEFAULT_LOWER_HSV_V = 50
@@ -56,9 +48,6 @@ def home():
     """
     return {"status": "✅ Servidor de recorte de fondo activo (método chroma key avanzado)"}
 
-# --- ¡LOS ENDPOINTS CRUD PARA PROFILES HAN SIDO ELIMINADOS! ---
-# Son responsabilidad exclusiva del backend PHP ahora.
-
 # 📸 Endpoint para procesar la imagen y quitar el fondo
 @app.post("/procesar-foto", summary="Process image and remove background with provided parameters")
 async def procesar_foto(
@@ -78,7 +67,7 @@ async def procesar_foto(
 ):
     """
     Recibe una imagen y TODOS los parámetros de configuración para chroma key desde el frontend/PHP,
-    aplica el algoritmo y devuelve la imagen con el fondo eliminado (PNG con transparencia).
+    aplica el algoritmo y devuelve la imagen con el fondo eliminado (WebP con transparencia).
     """
     try:
         input_bytes = await file.read()
@@ -135,13 +124,18 @@ async def procesar_foto(
         b, g, r = cv2.split(opencv_image)
         rgba_image = cv2.merge([b, g, r, alpha_channel])
 
-        # 5. Convertir a PIL Image y devolver
+        # 5. Convertir a PIL Image
         output_pil_image = Image.fromarray(cv2.cvtColor(rgba_image, cv2.COLOR_BGR2RGBA))
+        
+        # --- CAMBIO CLAVE AQUÍ: Guardar en buffer como WebP ---
         output_buffer = io.BytesIO()
-        output_pil_image.save(output_buffer, format="PNG") # Se recomienda PNG para transparencia
-        output_bytes = output_buffer.getvalue()
+        # Calidad de WebP: 0-100 (80 es un buen equilibrio)
+        # `method` (0-6) controla la velocidad/calidad de compresión (6 es la más lenta/mejor)
+        output_pil_image.save(output_buffer, format="WEBP", quality=80, method=6) 
+        output_buffer.seek(0) # Mueve el puntero al inicio del buffer
 
-        return Response(content=output_bytes, media_type="image/png")
+        # --- CAMBIO CLAVE AQUÍ: Devolver la respuesta con el tipo MIME correcto ---
+        return Response(content=output_buffer.getvalue(), media_type="image/webp")
 
     except HTTPException: # Re-lanza HTTPExceptions ya definidas (ej. 400 Bad Request)
         raise
