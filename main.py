@@ -13,7 +13,7 @@ app = FastAPI()
 # 🛡️ Añadir CORS para que tu HTML pueda hacer peticiones sin bloqueo
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Puedes restringirlo a tu dominio si prefieres (ej. ["https://tudominio.com"])
+    allow_origins=["https://weboluciona.com"], # Puedes restringirlo a tu dominio si prefieres (ej. ["https://tudominio.com"])
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
