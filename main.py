@@ -20,8 +20,6 @@ app.add_middleware(
 )
 
 # 🎨 PARAMETROS CLAVE PARA AJUSTAR LA ELIMINACIÓN DEL FONDO (Valores por defecto si no se proporcionan)
-# Estos valores por defecto son para el caso de que el frontend no los envíe,
-# pero el frontend siempre los envía, por lo que son más bien una referencia.
 DEFAULT_LOWER_HSV_H = 140
 DEFAULT_LOWER_HSV_S = 50
 DEFAULT_LOWER_HSV_V = 50
@@ -29,13 +27,14 @@ DEFAULT_UPPER_HSV_H = 170
 DEFAULT_UPPER_HSV_S = 255
 DEFAULT_UPPER_HSV_V = 255
 
-DEFAULT_FEATHER_BLUR_KERNEL_SIZE = 19 # Ajustado a 19 como en el frontend
-DEFAULT_ALPHA_THRESHOLD_FG = 200 # Ajustado a 200 como en el frontend
-DEFAULT_ALPHA_THRESHOLD_BG = 160 # Ajustado a 160 como en el frontend
+DEFAULT_FEATHER_BLUR_KERNEL_SIZE = 19
+DEFAULT_ALPHA_THRESHOLD_FG = 200
+DEFAULT_ALPHA_THRESHOLD_BG = 160
 DEFAULT_MORPH_KERNEL_SIZE = 5
-DEFAULT_MORPH_ITERATIONS = 3 # Ajustado a 3 como en el frontend
+DEFAULT_MORPH_ITERATIONS = 3
 
 # --- Función de lógica principal de Chroma Key (REUTILIZABLE) ---
+# Ahora devuelve la imagen RGBA PROCESADA y la MÁSCARA BINARIA para detección de contornos
 def _apply_chroma_key_logic(
     image_np: np.ndarray, # Espera una imagen OpenCV (BGR)
     lower_hsv_h: int, lower_hsv_s: int, lower_hsv_v: int,
@@ -43,9 +42,10 @@ def _apply_chroma_key_logic(
     feather_blur_kernel_size: int,
     alpha_threshold_fg: int, alpha_threshold_bg: int,
     morph_kernel_size: int, morph_iterations: int
-) -> np.ndarray: # Devuelve una imagen OpenCV (BGRA) con canal alfa
+) -> tuple[np.ndarray, np.ndarray]: # Devuelve (imagen RGBA, máscara binaria para contornos)
     """
-    Aplica el algoritmo de Chroma Key avanzado a una imagen.
+    Aplica el algoritmo de Chroma Key avanzado a una imagen y devuelve la imagen RGBA
+    y una máscara binaria limpia para la detección de contornos.
     """
     # 1. Definir los límites HSV
     lower_hsv = np.array([lower_hsv_h, lower_hsv_s, lower_hsv_v])
@@ -53,25 +53,11 @@ def _apply_chroma_key_logic(
 
     hsv_image = cv2.cvtColor(image_np, cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(hsv_image, lower_hsv, upper_hsv)
-    mask_inverted = cv2.bitwise_not(mask)
+    mask_inverted = cv2.bitwise_not(mask) # Máscara del objeto (púa)
 
-    # 2. Operaciones morfológicas
-    # Asegúrate de que los valores de kernel sean impares y positivos
-    if morph_kernel_size % 2 == 0 or morph_kernel_size <= 0:
-        morph_kernel_size = 5 if morph_kernel_size <=0 else morph_kernel_size + 1 # Asegura que sea impar y positivo
-        print(f"Advertencia: morph_kernel_size ajustado a {morph_kernel_size} (debe ser impar y positivo).")
-
-    kernel_morph = np.ones((morph_kernel_size, morph_kernel_size), np.uint8)
-    
-    mask_inverted = cv2.morphologyEx(mask_inverted, cv2.MORPH_OPEN, kernel_morph, iterations=morph_iterations)
-    mask_inverted = cv2.morphologyEx(mask_inverted, cv2.MORPH_CLOSE, kernel_morph, iterations=morph_iterations)
-
-    # 3. Desenfoque y canal alfa
-    # Asegúrate de que feather_blur_kernel_size sea impar y positivo
+    # 2. Desenfoque y canal alfa
     if feather_blur_kernel_size % 2 == 0 or feather_blur_kernel_size <= 0:
-        feather_blur_kernel_size = 15 if feather_blur_kernel_size <= 0 else feather_blur_kernel_size + 1 # Asegura que sea impar y positivo
-        print(f"Advertencia: feather_blur_kernel_size ajustado a {feather_blur_kernel_size} (debe ser impar y positivo).")
-
+        feather_blur_kernel_size = 15 if feather_blur_kernel_size <= 0 else feather_blur_kernel_size + 1
     feather_blur_kernel_tuple = (feather_blur_kernel_size, feather_blur_kernel_size)
     blurred_mask = cv2.GaussianBlur(mask_inverted, feather_blur_kernel_tuple, 0)
     
@@ -79,11 +65,24 @@ def _apply_chroma_key_logic(
                               [alpha_threshold_bg, alpha_threshold_fg],
                               [0, 255]).astype(np.uint8)
 
-    # 4. Combinar con la imagen original
+    # 3. Combinar con la imagen original para obtener la imagen RGBA final
     b, g, r = cv2.split(image_np)
     rgba_image = cv2.merge([b, g, r, alpha_channel])
 
-    return rgba_image
+    # 4. Crear una máscara binaria limpia para encontrar contornos (usando el alpha_channel)
+    # Aplicamos umbral y operaciones morfológicas para asegurar contornos bien definidos
+    binary_mask_for_contours = alpha_channel.copy()
+    _, binary_mask_for_contours = cv2.threshold(binary_mask_for_contours, 1, 255, cv2.THRESH_BINARY)
+    
+    # Operaciones morfológicas para limpiar y separar contornos antes de findContours
+    if morph_kernel_size % 2 == 0 or morph_kernel_size <= 0:
+        morph_kernel_size = 5 if morph_kernel_size <=0 else morph_kernel_size + 1
+    kernel_morph_batch = np.ones((morph_kernel_size, morph_kernel_size), np.uint8) 
+    
+    binary_mask_for_contours = cv2.morphologyEx(binary_mask_for_contours, cv2.MORPH_CLOSE, kernel_morph_batch, iterations=morph_iterations)
+    binary_mask_for_contours = cv2.morphologyEx(binary_mask_for_contours, cv2.MORPH_OPEN, kernel_morph_batch, iterations=morph_iterations)
+
+    return rgba_image, binary_mask_for_contours
 
 # 📸 Endpoint de salud para Render
 @app.get("/healthz", summary="Health Check")
@@ -126,8 +125,8 @@ async def procesar_foto(
         pil_image = Image.open(io.BytesIO(input_bytes)).convert("RGB")
         opencv_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
-        # Aplicar la lógica de Chroma Key
-        rgba_image = _apply_chroma_key_logic(
+        # Aplicar la lógica de Chroma Key (solo necesitamos la imagen RGBA aquí)
+        rgba_image, _ = _apply_chroma_key_logic( # Ignoramos la máscara binaria
             opencv_image,
             lower_hsv_h, lower_hsv_s, lower_hsv_v,
             upper_hsv_h, upper_hsv_s, upper_hsv_v,
@@ -163,7 +162,6 @@ async def procesar_foto(
 @app.post("/batch-process", summary="Process A4 image with multiple picks and return a ZIP of cropped WebP images")
 async def batch_process(
     file: UploadFile = File(...),
-    # Recibimos todos los parámetros del perfil como en /procesar-foto
     lower_hsv_h: int | None = Form(DEFAULT_LOWER_HSV_H),
     lower_hsv_s: int | None = Form(DEFAULT_LOWER_HSV_S),
     lower_hsv_v: int | None = Form(DEFAULT_LOWER_HSV_V),
@@ -174,12 +172,13 @@ async def batch_process(
     alpha_threshold_fg: int | None = Form(DEFAULT_ALPHA_THRESHOLD_FG),
     alpha_threshold_bg: int | None = Form(DEFAULT_ALPHA_THRESHOLD_BG),
     morph_kernel_size: int | None = Form(DEFAULT_MORPH_KERNEL_SIZE),
-    morph_iterations: int | None = Form(DEFAULT_MORPH_ITERATIONS)
+    morph_iterations: int | None = Form(DEFAULT_MORPH_ITERATIONS),
+    file_prefix: str = Form("pua") # Recibe el prefijo del frontend
 ):
     """
     Recibe una imagen A4 con múltiples púas en un fondo chroma,
-    elimina el fondo, detecta cada púa y devuelve un archivo ZIP
-    con cada púa recortada como un archivo WebP individual.
+    elimina el fondo, detecta cada púa, la rota para que quede vertical
+    y devuelve un archivo ZIP con cada púa recortada como un archivo WebP individual.
     """
     try:
         # Leer la imagen A4
@@ -191,7 +190,8 @@ async def batch_process(
             raise HTTPException(status_code=400, detail="No se pudo decodificar la imagen A4.")
 
         # 1. Aplicar Chroma Key a toda la imagen A4
-        processed_a4_img_rgba = _apply_chroma_key_logic(
+        # Ahora _apply_chroma_key_logic devuelve la imagen RGBA y la máscara binaria
+        processed_a4_img_rgba, binary_mask_for_contours = _apply_chroma_key_logic(
             img_a4,
             lower_hsv_h, lower_hsv_s, lower_hsv_v,
             upper_hsv_h, upper_hsv_s, upper_hsv_v,
@@ -201,26 +201,7 @@ async def batch_process(
         )
 
         # 2. Detección de Contornos (para identificar cada púa)
-        # Usamos el canal alfa para encontrar los contornos de los objetos
-        alpha_channel_for_contours = processed_a4_img_rgba[:, :, 3] # Canal alfa
-        
-        # Umbralización para obtener una máscara binaria clara de los objetos
-        # Un umbral bajo (ej. 10) es efectivo si el fondo es 0 y el objeto >0
-        _, binary_mask = cv2.threshold(alpha_channel_for_contours, 10, 255, cv2.THRESH_BINARY)
-        
-        # Operaciones morfológicas adicionales para limpiar la máscara antes de encontrar contornos
-        # Esto ayuda a cerrar pequeños huecos y separar objetos ligeramente unidos
-        # Asegúrate de que el kernel sea impar y positivo
-        batch_morph_kernel_size = 5 # Tamaño del kernel para la detección de púas
-        if batch_morph_kernel_size % 2 == 0: batch_morph_kernel_size += 1
-        kernel_morph_batch = np.ones((batch_morph_kernel_size, batch_morph_kernel_size), np.uint8) 
-        
-        # Cerrar para unir pequeños huecos, Abrir para eliminar pequeños ruidos
-        binary_mask = cv2.morphologyEx(binary_mask, cv2.MORPH_CLOSE, kernel_morph_batch, iterations=2)
-        binary_mask = cv2.morphologyEx(binary_mask, cv2.MORPH_OPEN, kernel_morph_batch, iterations=2)
-
-        # Encontrar contornos
-        contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(binary_mask_for_contours, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         # --- AÑADIR ESTOS PRINTS TEMPORALES PARA DEPURACIÓN ---
         print("\n--- INICIO DE DEBUG: Áreas de Contornos Detectados ---")
@@ -229,65 +210,101 @@ async def batch_process(
         # --- FIN DE PRINTS TEMPORALES ---
 
         output_images = []
-        # --- AJUSTA ESTOS VALORES SEGÚN EL TAMAÑO DE TUS PÚAS EN LA IMAGEN A4 ---
-        # Si tus púas son pequeñas en una A4 grande, reduce min_pua_area.
-        # Si detecta todo el A4, reduce max_pua_area.
-        MIN_PUA_AREA = 12000  # Área mínima para considerar un contorno como una púa (VALOR AJUSTADO)
-        MAX_PUA_AREA = 30000  # Área máxima para evitar detectar la hoja completa (VALOR AJUSTADO)
-
+        MIN_PUA_AREA = 12000  # Área mínima para considerar un contorno como una púa
+        MAX_PUA_AREA = 30000  # Área máxima para evitar detectar la hoja completa
 
         for i, contour in enumerate(contours):
             area = cv2.contourArea(contour)
-            # --- AÑADIR ESTE PRINT TEMPORAL ---
-            print(f"Contorno {i+1}: Área = {int(area)} píxeles cuadrados")
-            # --- FIN DE PRINT TEMPORAL ---
+            print(f"Contorno {i+1}: Área = {int(area)} píxeles cuadrados") # Debugging
             
-            # Filtrar por tamaño para evitar ruido y detectar solo objetos de interés
             if MIN_PUA_AREA < area < MAX_PUA_AREA: 
-                # Obtener el rectángulo delimitador del contorno
-                x, y, w, h = cv2.boundingRect(contour)
+                # Obtener el rectángulo de área mínima y su ángulo
+                rect = cv2.minAreaRect(contour)
+                (center_x, center_y), (width, height), angle = rect
 
-                # Expandir el bounding box ligeramente para asegurar que no se corten los bordes
-                padding = 20 # Píxeles de padding. Ajusta si necesitas más o menos margen.
+                # --- Lógica de Rotación para Verticalidad ---
+                # Ajustar el ángulo para que el lado más largo sea la "altura"
+                if width < height: # Si el 'height' es el lado más largo
+                    # El ángulo ya está referenciado al eje Y (vertical)
+                    # minAreaRect da ángulos en [-90, 0) para rectángulos más altos que anchos.
+                    # Queremos que la púa quede con 0 grados (vertical)
+                    rotation_angle = angle
+                else: # Si el 'width' es el lado más largo (rectángulo "acostado")
+                    # El ángulo está referenciado al eje X (horizontal)
+                    # Sumamos 90 para referenciarlo al eje Y (vertical)
+                    rotation_angle = angle + 90
                 
-                # Calcular coordenadas con padding, asegurándose de no salirse de los límites de la imagen
-                x_padded = max(0, x - padding)
-                y_padded = max(0, y - padding)
+                # Para asegurar que la púa no quede "boca abajo"
+                # Esto es una heurística y puede requerir ajuste fino si las púas tienen una orientación preferida
+                # (ej. la punta siempre hacia abajo).
+                # Por ahora, simplemente rota para que el lado más largo sea vertical.
                 
-                x2_padded = min(processed_a4_img_rgba.shape[1], x + w + padding)
-                y2_padded = min(processed_a4_img_rgba.shape[0], y + h + padding)
+                # Crear la matriz de rotación
+                M = cv2.getRotationMatrix2D((center_x, center_y), rotation_angle, 1.0)
                 
-                # Ancho y alto finales del recorte
-                w_final = x2_padded - x_padded
-                h_final = y2_padded - y_padded
+                # Calcular las nuevas dimensiones de la imagen después de rotar para evitar recortes
+                cos = np.abs(M[0, 0])
+                sin = np.abs(M[0, 1])
+                new_width = int((processed_a4_img_rgba.shape[1] * cos) + (processed_a4_img_rgba.shape[0] * sin))
+                new_height = int((processed_a4_img_rgba.shape[1] * sin) + (processed_a4_img_rgba.shape[0] * cos))
 
-                # Recortar la púa de la imagen procesada (RGBA)
-                pua_cropped_rgba = processed_a4_img_rgba[y_padded:y2_padded, x_padded:x2_padded]
+                # Ajustar la matriz de rotación para trasladar la imagen al nuevo centro
+                M[0, 2] += (new_width / 2) - center_x
+                M[1, 2] += (new_height / 2) - center_y
 
-                if pua_cropped_rgba.size == 0: # Evitar errores si el recorte es vacío
-                    continue
+                # Rotar la imagen RGBA completa
+                rotated_image_full = cv2.warpAffine(processed_a4_img_rgba, M, (new_width, new_height), 
+                                                    flags=cv2.INTER_LANCZOS4, 
+                                                    borderMode=cv2.BORDER_CONSTANT, 
+                                                    borderValue=(0, 0, 0, 0)) # Fondo transparente
 
-                # Convertir a PIL Image para guardar como WebP
-                pil_pua = Image.fromarray(cv2.cvtColor(pua_cropped_rgba, cv2.COLOR_BGRA2RGBA))
+                # Transformar el contorno original con la misma matriz de rotación
+                # Esto nos da la nueva posición del contorno en la imagen rotada
+                transformed_contour = cv2.transform(contour.reshape(-1, 1, 2), M).reshape(-1, 1, 2)
+                
+                # Obtener el nuevo rectángulo delimitador (axial) de la púa en la imagen rotada
+                x_rot, y_rot, w_rot, h_rot = cv2.boundingRect(transformed_contour)
 
-                # Guardar en un buffer
-                img_byte_arr = io.BytesIO()
-                pil_pua.save(img_byte_arr, format="WEBP", quality=80, method=6)
-                img_byte_arr.seek(0)
-                output_images.append({'name': f'pua_{i+1}.webp', 'data': img_byte_arr})
+                # Añadir un pequeño padding al recorte final
+                padding = 10 
+                x_final = max(0, x_rot - padding)
+                y_final = max(0, y_rot - padding)
+                w_final = min(rotated_image_full.shape[1] - x_final, w_rot + 2 * padding)
+                h_final = min(rotated_image_full.shape[0] - y_final, h_rot + 2 * padding)
+                
+                # Recortar la púa de la imagen rotada completa
+                pua_cropped_rgba = rotated_image_full[y_final : y_final + h_final, x_final : x_final + w_final]
+
+                if pua_cropped_rgba.size == 0:
+                    print(f"Advertencia: Recorte vacío para contorno {i+1}. Saltando.")
+                    continue 
+
+                # Convertir a WebP y añadir a la lista de salida
+                is_success, buffer = cv2.imencode(".webp", pua_cropped_rgba)
+                if is_success:
+                    output_images.append({
+                        "filename": f"{file_prefix}_{i+1}.webp", # Usamos el prefijo aquí
+                        "data": io.BytesIO(buffer.tobytes())
+                    })
         
         if not output_images:
-            raise HTTPException(status_code=404, detail=f"No se detectaron púas en la imagen A4. Intenta ajustar los parámetros HSV, la separación de las púas o los valores de MIN_PUA_AREA ({MIN_PUA_AREA}) y MAX_PUA_AREA ({MAX_PUA_AREA}).")
+            raise HTTPException(status_code=404, detail=f"No se detectaron púas válidas para procesar con los parámetros dados. Verifique el rango de área ({MIN_PUA_AREA}-{MAX_PUA_AREA}) o los parámetros de Chroma Key.")
 
         # 3. Comprimir todas las imágenes en un archivo ZIP
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
             for img_info in output_images:
-                zf.writestr(img_info['name'], img_info['data'].getvalue())
+                zf.writestr(img_info["filename"], img_info["data"].getvalue())
         zip_buffer.seek(0)
+        
+        # Define el nombre del archivo ZIP
+        zip_filename = f"{file_prefix}_puas_procesadas.zip"
 
-        return StreamingResponse(zip_buffer, media_type="application/zip",
-                                 headers={"Content-Disposition": "attachment; filename=puas_procesadas.zip"})
+        return StreamingResponse(
+            zip_buffer,
+            media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename={zip_filename}"}
+        )
 
     except HTTPException: # Re-lanza HTTPExceptions ya definidas
         raise
