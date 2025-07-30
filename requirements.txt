@@ -4,4 +4,3 @@ uvicorn
 Pillow
 numpy
 opencv-python-headless
-PyMySQL
