@@ -201,10 +201,6 @@ async def batch_process(
 
         # 2. Detección de Contornos (para identificar cada púa)
         contours, _ = cv2.findContours(binary_mask_for_contours, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        print("\n--- INICIO DE DEBUG: Áreas de Contornos Detectados ---")
-        if not contours:
-            print("No se detectaron contornos en la imagen A4. Intenta ajustar los parámetros HSV o los parámetros morfológicos.")
         
         output_images = []
         MIN_PUA_AREA = 12000  # Área mínima para considerar un contorno como una púa
@@ -212,12 +208,8 @@ async def batch_process(
 
         for i, contour in enumerate(contours):
             area = cv2.contourArea(contour)
-            print(f"Contorno {i+1}: Área = {int(area)} píxeles cuadrados")
             
             if MIN_PUA_AREA < area < MAX_PUA_AREA: 
-                # *** Se ha eliminado la lógica de rotación aquí ***
-                # Ahora solo se usa el boundingRect para el recorte, manteniendo la orientación original
-
                 # Obtener el rectángulo delimitador (axial) de la púa en la imagen original
                 x, y, w, h = cv2.boundingRect(contour)
 
