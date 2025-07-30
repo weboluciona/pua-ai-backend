@@ -222,15 +222,25 @@ async def batch_process(
         # Encontrar contornos
         contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
+        # --- AÑADIR ESTOS PRINTS TEMPORALES PARA DEPURACIÓN ---
+        print("\n--- INICIO DE DEBUG: Áreas de Contornos Detectados ---")
+        if not contours:
+            print("No se detectaron contornos en la imagen A4. Intenta ajustar los parámetros HSV o los parámetros morfológicos.")
+        # --- FIN DE PRINTS TEMPORALES ---
+
         output_images = []
         # --- AJUSTA ESTOS VALORES SEGÚN EL TAMAÑO DE TUS PÚAS EN LA IMAGEN A4 ---
         # Si tus púas son pequeñas en una A4 grande, reduce min_pua_area.
         # Si detecta todo el A4, reduce max_pua_area.
-        MIN_PUA_AREA = 1000  # Área mínima para considerar un contorno como una púa
-        MAX_PUA_AREA = 400000 # Área máxima para evitar detectar la hoja completa
+        MIN_PUA_AREA = 1000  # Área mínima para considerar un contorno como una púa (AJUSTA AQUÍ)
+        MAX_PUA_AREA = 400000 # Área máxima para evitar detectar la hoja completa (AJUSTA AQUÍ)
 
         for i, contour in enumerate(contours):
             area = cv2.contourArea(contour)
+            # --- AÑADIR ESTE PRINT TEMPORAL ---
+            print(f"Contorno {i+1}: Área = {int(area)} píxeles cuadrados")
+            # --- FIN DE PRINT TEMPORAL ---
+            
             # Filtrar por tamaño para evitar ruido y detectar solo objetos de interés
             if MIN_PUA_AREA < area < MAX_PUA_AREA: 
                 # Obtener el rectángulo delimitador del contorno
