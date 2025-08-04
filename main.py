@@ -46,21 +46,64 @@ def _apply_chroma_key_logic(
     """
     Aplica el algoritmo de Chroma Key avanzado a una imagen y devuelve la imagen RGBA
     y una máscara binaria limpia para la detección de contornos.
-    """
-    # 1. Definir los límites HSV
-    lower_hsv = np.array([lower_hsv_h, lower_hsv_s, lower_hsv_v])
-    upper_hsv = np.array([upper_hsv_h, upper_hsv_s, upper_hsv_v])
 
+    MODIFICADO: Usa Flood Fill para una selección de fondo contigua.
+    """
+    # Convertir a HSV para la detección de color
     hsv_image = cv2.cvtColor(image_np, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv_image, lower_hsv, upper_hsv)
-    mask_inverted = cv2.bitwise_not(mask) # Máscara del objeto (púa)
+
+    # Punto de semilla para floodFill (ej. esquina superior izquierda, o un punto configurable)
+    # Asumimos que el fondo está en (0,0) o (5,5) para evitar bordes puros.
+    # Podrías hacerlo configurable si el fondo no siempre está en la esquina.
+    seed_point = (5, 5) 
+
+    # Crear una máscara temporal para el floodFill (debe ser 2 píxeles más grande que la imagen)
+    # y de tipo CV_8UC1 (np.uint8).
+    h, w, _ = image_np.shape
+    mask_floodfill = np.zeros((h + 2, w + 2), np.uint8)
+
+    # El color del píxel inicial para floodFill
+    seed_color_hsv = hsv_image[seed_point[1], seed_point[0]] # [y, x]
+
+    # Calcular loDiff y upDiff para floodFill
+    # loDiff y upDiff son las diferencias máximas *hacia abajo* y *hacia arriba*
+    # en los componentes del color (H, S, V) desde el color del punto de semilla.
+    # Para usar tus rangos lower_hsv/upper_hsv con floodFill, calculamos la diferencia
+    # entre el color del punto de semilla y tus límites.
+
+    # Aquí hay una forma de adaptar tus rangos a loDiff/upDiff:
+    # Asegúrate de que los valores no sean negativos
+    loDiff_h = max(0, int(seed_color_hsv[0] - lower_hsv_h))
+    loDiff_s = max(0, int(seed_color_hsv[1] - lower_hsv_s))
+    loDiff_v = max(0, int(seed_color_hsv[2] - lower_hsv_v))
+
+    upDiff_h = max(0, int(upper_hsv_h - seed_color_hsv[0]))
+    upDiff_s = max(0, int(upper_hsv_s - seed_color_hsv[1]))
+    upDiff_v = max(0, int(upper_hsv_v - seed_color_hsv[2]))
+
+    loDiff = (loDiff_h, loDiff_s, loDiff_v)
+    upDiff = (upDiff_h, upDiff_s, upDiff_v)
+
+    # Realizar el relleno por inundación
+    # Valor de relleno (aquí, 255 para marcar el área de fondo en la máscara)
+    # FLODFILL_MASK_ONLY: Solo modifica la máscara
+    # FLODFILL_FIXED_RANGE: Usa loDiff/upDiff en relación al color del punto de semilla
+    cv2.floodFill(hsv_image, mask_floodfill, seed_point, (0, 0, 0), loDiff=loDiff, upDiff=upDiff, flags=cv2.FLOODFILL_MASK_ONLY | cv2.FLOODFILL_FIXED_RANGE)
+
+    # La máscara resultante de floodFill está en mask_floodfill[1:-1, 1:-1]
+    # Invertirla para que 255 sea el objeto (púa) y 0 sea el fondo
+    mask_object = mask_floodfill[1:-1, 1:-1] # Extrae la parte de la máscara que corresponde a la imagen original
+    mask_inverted = cv2.bitwise_not(mask_object) # Ahora 255 = objeto, 0 = fondo
 
     # 2. Desenfoque y canal alfa
     if feather_blur_kernel_size % 2 == 0 or feather_blur_kernel_size <= 0:
         feather_blur_kernel_size = 15 if feather_blur_kernel_size <= 0 else feather_blur_kernel_size + 1
     feather_blur_kernel_tuple = (feather_blur_kernel_size, feather_blur_kernel_size)
+    
+    # Aplicar el desenfoque a la máscara invertida (objeto) para suavizar bordes
     blurred_mask = cv2.GaussianBlur(mask_inverted, feather_blur_kernel_tuple, 0)
     
+    # Interpolar el canal alfa
     alpha_channel = np.interp(blurred_mask,
                               [alpha_threshold_bg, alpha_threshold_fg],
                               [0, 255]).astype(np.uint8)
@@ -98,7 +141,7 @@ def home():
     """
     Endpoint de bienvenida para el servicio de recorte de fondo.
     """
-    return {"status": "✅ Servidor de recorte de fondo activo (método chroma key avanzado)"}
+    return {"status": "✅ Servidor de recorte de fondo activo (método chroma key avanzado con flood fill)"}
 
 # 📸 Endpoint para procesar una sola imagen y quitar el fondo
 @app.post("/procesar-foto", summary="Process single image and remove background with provided parameters")
